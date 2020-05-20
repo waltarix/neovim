@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags: ['unicode/*.*.*']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+
+    - name: Setup Lua
+      run: |
+        sudo apt-get -qq install lua5.3
+        sudo update-alternatives --install /usr/bin/lua lua /usr/bin/lua5.3 100
+
+    - name: Generate wcwidth9.h
+      run: ./scripts/generate-wcwidth9.sh
+
+    - name: Archive unicode
+      run: tar -Jcvf dist/unicode.tar.xz unicode
+
+    - name: Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

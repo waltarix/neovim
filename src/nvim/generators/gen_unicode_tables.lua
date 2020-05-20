@@ -93,10 +93,10 @@ end
 
 local make_range = function(start, end_, step, add)
   if step and add then
-    return ('  {0x%x, 0x%x, %d, %d},\n'):format(
+    return ('  {0x%X, 0x%X, %d, %d},\n'):format(
       start, end_, step == 0 and -1 or step, add)
   else
-    return ('  {0x%04x, 0x%04x},\n'):format(start, end_)
+    return ('  {0x%04X, 0x%04X},\n'):format(start, end_)
   end
 end
 
@@ -130,7 +130,7 @@ local build_convert_table = function(ut_fp, props, cond_func, nl_index,
   if start >= 0 then
     ut_fp:write(make_range(start, end_, step, add))
   end
-  ut_fp:write('};\n')
+  ut_fp:write('};\n\n')
 end
 
 local build_case_table = function(ut_fp, dataprops, table_name, index)
@@ -149,7 +149,7 @@ local build_fold_table = function(ut_fp, foldprops)
 end
 
 local build_combining_table = function(ut_fp, dataprops)
-  ut_fp:write('static const struct interval combining[] = {\n')
+  ut_fp:write('static const struct wcwidth9_interval wcwidth9_combining[] = {\n')
   local start = -1
   local end_ = -1
   for _, p in ipairs(dataprops) do
@@ -171,12 +171,12 @@ local build_combining_table = function(ut_fp, dataprops)
   if start >= 0 then
     ut_fp:write(make_range(start, end_))
   end
-  ut_fp:write('};\n')
+  ut_fp:write('};\n\n')
 end
 
 local build_width_table = function(ut_fp, dataprops, widthprops, widths,
                                    table_name)
-  ut_fp:write('static const struct interval ' .. table_name .. '[] = {\n')
+  ut_fp:write('static const struct wcwidth9_interval wcwidth9_' .. table_name .. '[] = {\n')
   local start = -1
   local end_ = -1
   local dataidx = 1
@@ -225,7 +225,7 @@ local build_width_table = function(ut_fp, dataprops, widthprops, widths,
     ut_fp:write(make_range(start, end_))
     table.insert(ret, {start, end_})
   end
-  ut_fp:write('};\n')
+  ut_fp:write('};\n\n')
   return ret
 end
 
@@ -282,17 +282,17 @@ local build_emoji_table = function(ut_fp, emojiprops, doublewidth, ambiwidth)
     end
   end
 
-  ut_fp:write('static const struct interval emoji_all[] = {\n')
-  for _, p in ipairs(emoji) do
-    ut_fp:write(make_range(p[1], p[2]))
-  end
-  ut_fp:write('};\n')
+  -- ut_fp:write('static const struct wcwidth9_interval wcwidth9_emoji_all[] = {\n')
+  -- for _, p in ipairs(emoji) do
+  --   ut_fp:write(make_range(p[1], p[2]))
+  -- end
+  -- ut_fp:write('};\n\n')
 
-  ut_fp:write('static const struct interval emoji_width[] = {\n')
+  ut_fp:write('static const struct wcwidth9_interval wcwidth9_emoji_width[] = {\n')
   for _, p in ipairs(emojiwidth) do
     ut_fp:write(make_range(p[1], p[2]))
   end
-  ut_fp:write('};\n')
+  ut_fp:write('};\n\n')
 end
 
 local ud_fp = io.open(unicodedata_fname, 'r')
@@ -301,15 +301,49 @@ ud_fp:close()
 
 local ut_fp = io.open(utf_tables_fname, 'w')
 
-build_case_table(ut_fp, dataprops, 'Lower', 14)
-build_case_table(ut_fp, dataprops, 'Upper', 13)
+ut_fp:write([[
+#ifndef WCWIDTH9_H
+#define WCWIDTH9_H
+
+#include <stdlib.h>
+#include <stdbool.h>
+
+struct wcwidth9_interval {
+  long first;
+  long last;
+};
+
+static const struct wcwidth9_interval wcwidth9_private[] = {
+  {0x0F0000, 0x0FFFFD},
+  {0x100000, 0x10FFFD},
+};
+
+static const struct wcwidth9_interval wcwidth9_nonprint[] = {
+  {0x0000, 0x001F},
+  {0x007F, 0x009F},
+  {0x00AD, 0x00AD},
+  {0x070F, 0x070F},
+  {0x180B, 0x180E},
+  {0x200B, 0x200F},
+  {0x2028, 0x202E},
+  {0x206A, 0x206F},
+  {0xD800, 0xDFFF},
+  {0xFEFF, 0xFEFF},
+  {0xFFF9, 0xFFFB},
+  {0xFFFE, 0xFFFF},
+};
+
+]])
+
+-- build_case_table(ut_fp, dataprops, 'Lower', 14)
+-- build_case_table(ut_fp, dataprops, 'Upper', 13)
 build_combining_table(ut_fp, dataprops)
 
 local cf_fp = io.open(casefolding_fname, 'r')
 local foldprops = parse_fold_props(cf_fp)
 cf_fp:close()
 
-build_fold_table(ut_fp, foldprops)
+-- build_fold_table(ut_fp, foldprops)
 
 local eaw_fp = io.open(eastasianwidth_fname, 'r')
 local widthprops = parse_width_props(eaw_fp)
@@ -325,5 +359,74 @@ local emojiprops = parse_emoji_props(emoji_fp)
 emoji_fp:close()
 
 build_emoji_table(ut_fp, emojiprops, doublewidth, ambiwidth)
+
+ut_fp:write([[
+
+#define WCWIDTH9_ARRAY_SIZE(arr) ((sizeof(arr)/sizeof((arr)[0])) / ((size_t)(!(sizeof(arr) % sizeof((arr)[0])))))
+
+static inline bool wcwidth9_intable(const struct wcwidth9_interval *table, size_t n_items, int c) {
+  int mid, bot, top;
+
+  if (c < table[0].first) {
+    return false;
+  }
+
+  bot = 0;
+  top = (int)(n_items - 1);
+  while (top >= bot) {
+    mid = (bot + top) / 2;
+
+    if (table[mid].last < c) {
+      bot = mid + 1;
+    } else if (table[mid].first > c) {
+      top = mid - 1;
+    } else {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static inline int wcwidth9(int c) {
+  if (c == 0) {
+    return 0;
+  }
+  if (c < 0|| c > 0x10ffff) {
+    return -1;
+  }
+  if (c <= 0xff) {
+    return 1;
+  }
+
+  if (wcwidth9_intable(wcwidth9_nonprint, WCWIDTH9_ARRAY_SIZE(wcwidth9_nonprint), c)) {
+    return -1;
+  }
+
+  if (wcwidth9_intable(wcwidth9_combining, WCWIDTH9_ARRAY_SIZE(wcwidth9_combining), c)) {
+    return 0;
+  }
+
+  if (wcwidth9_intable(wcwidth9_private, WCWIDTH9_ARRAY_SIZE(wcwidth9_private), c)) {
+    return -3;
+  }
+
+  if (wcwidth9_intable(wcwidth9_ambiguous, WCWIDTH9_ARRAY_SIZE(wcwidth9_ambiguous), c)) {
+    return 2;
+  }
+
+  if (wcwidth9_intable(wcwidth9_doublewidth, WCWIDTH9_ARRAY_SIZE(wcwidth9_doublewidth), c)) {
+    return 2;
+  }
+
+  if (wcwidth9_intable(wcwidth9_emoji_width, WCWIDTH9_ARRAY_SIZE(wcwidth9_emoji_width), c)) {
+    return 2;
+  }
+
+  return 1;
+}
+
+#endif /* WCWIDTH9_H */
+]])
 
 ut_fp:close()
